@@ -1,0 +1,6 @@
+garminconnect>=0.2.19
+garth>=0.4.0
+pydantic>=2.5.0
+pandas>=2.1.0
+typer>=0.9.0
+rich>=13.7.0

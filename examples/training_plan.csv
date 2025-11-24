@@ -1,0 +1,74 @@
+"WEEK","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"
+"1","note: Rest Day
+- note: 30 min spin or full rest","running: 10k Speed
+- warmup: 15:00
+- repeat: 8
+  - run: 2:00 @z4
+  - recover: 1:30 @z1
+- cooldown: 15:00","running: Vert Treadmill
+- run: 60:00 @z2
+- note: Set incline 8-10 percent","running: Tempo & Strides
+- warmup: 15:00
+- run: 20:00 @z3
+- repeat: 5
+  - run: 0:30 @z5
+  - recover: 1:30 @z1
+- cooldown: 10:00","running: Easy Flat
+- run: 45:00 @z2","running: Gym Ultra Sim
+- warmup: 10:00
+- repeat: 4
+  - run: 10:00 @z2
+  - other: 10:00
+  - note: Stair machine or 15 percent hike","note: Recovery Hike
+- note: 45 min outdoor hike"
+"2","note: Rest Day
+- note: 30 min spin or full rest","running: 10k Speed
+- warmup: 15:00
+- repeat: 10
+  - run: 2:00 @z4
+  - recover: 1:30 @z1
+- cooldown: 15:00","running: Vert Treadmill
+- run: 70:00 @z2
+- note: Set incline 10-12 percent","running: Tempo & Strides
+- warmup: 15:00
+- run: 25:00 @z3
+- repeat: 6
+  - run: 0:30 @z5
+  - recover: 1:30 @z1
+- cooldown: 10:00","running: Easy Flat
+- run: 50:00 @z2","running: Gym Ultra Sim
+- warmup: 10:00
+- repeat: 5
+  - run: 10:00 @z2
+  - other: 10:00
+  - note: Stair machine or 15 percent hike","note: Recovery Hike
+- note: 50 min outdoor hike"
+"3","note: Rest Day
+- note: 30 min spin or full rest","running: 10k Speed
+- warmup: 15:00
+- repeat: 6
+  - run: 3:00 @z4
+  - recover: 2:00 @z1
+- cooldown: 15:00","running: Vert Treadmill
+- run: 75:00 @z2
+- note: Set incline 12-15 percent","running: Tempo & Strides
+- warmup: 15:00
+- run: 30:00 @z3
+- repeat: 6
+  - run: 0:30 @z5
+  - recover: 1:30 @z1
+- cooldown: 10:00","running: Easy Flat
+- run: 50:00 @z2","running: Gym Ultra Sim
+- warmup: 10:00
+- repeat: 6
+  - run: 10:00 @z2
+  - other: 10:00
+  - note: Stair machine or 15 percent hike","note: Recovery Hike
+- note: 60 min outdoor hike"
+"4","note: Rest Day
+- note: Pack bags","running: Pre-Flight Fartlek
+- warmup: 10:00
+- repeat: 8
+  - run: 1:00 @z4
+  - recover: 1:00 @z1
+- cooldown: 10:00","","","","",""
