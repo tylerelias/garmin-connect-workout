@@ -8,9 +8,10 @@ A Python CLI tool to upload CSV training plans to Garmin Connect. This tool pars
 - 🔐 **Secure authentication** - Token caching prevents rate limiting; supports MFA
 - 🏃 **Running workout support** - Full support for warmup, cooldown, intervals, repeats
 - 🎯 **Targets** - Heart rate zones (z1-z5) and pace ranges
-- ⏱️ **Flexible durations** - Time-based (mm:ss), distance-based (km/mi), or lap-button
+- ⏱️ **Flexible durations** - Time-based (mm:ss), distance-based (km/mi/m), or lap-button
 - 🔄 **Nested repeats** - Support for complex interval structures
 - 📝 **Step notes** - Add notes to any step that appear in Garmin Connect
+- 📋 **List workouts** - View scheduled workouts from your Garmin calendar
 - 🗑️ **Bulk delete** - Clear scheduled workouts from a date range before re-uploading
 - 📊 **Progress tracking** - Rich CLI with progress bars and colored output
 
@@ -97,6 +98,45 @@ garmin-plan-uploader delete-range 2025-01-06 2025-03-31 --yes
 
 This removes workouts from your calendar but does **not** delete the underlying workout definitions.
 
+### List Scheduled Workouts
+
+View all scheduled workouts in a date range:
+
+```bash
+# List all workouts in a date range
+garmin-plan-uploader list 2026-03-01 2026-07-31
+
+# Group workouts by week for easier viewing
+garmin-plan-uploader list 2026-03-01 2026-07-31 --by-week
+```
+
+This is useful for reviewing your training plan without making any changes.
+
+## Common Workflows
+
+### Update an Existing Training Plan
+
+When you've made changes to your CSV and need to re-upload:
+
+```bash
+# 1. Delete the existing scheduled workouts
+garmin-plan-uploader delete-range 2026-01-01 2026-07-31 --yes
+
+# 2. Upload the updated plan
+garmin-plan-uploader upload updated_plan.csv --start-date 2026-01-05
+```
+
+### Review Your Schedule Before Race Day
+
+```bash
+# See what's scheduled for race week and taper
+garmin-plan-uploader list 2026-07-13 2026-07-25 --by-week
+```
+
+### Add Individual Workouts
+
+You can upload a small CSV with just a few workouts to add to your existing schedule without deleting anything.
+
 ## CSV Format
 
 The CSV file should have the following structure:
@@ -145,11 +185,13 @@ Currently supported:
 | Format | Example | Description |
 |--------|---------|-------------|
 | `mm:ss` | `15:00` | Time in minutes:seconds |
-| `mmm:ss` | `225:00` | Extended time format |
+| `mmm:ss` | `225:00` | Extended time format (e.g., 3hr 45min) |
 | `<n>km` | `5km` | Distance in kilometers |
 | `<n>mi` | `3mi` | Distance in miles |
 | `<n>m` | `1600m` | Distance in meters |
 | `lap-button` | `lap-button` | Manual lap (user ends step) |
+
+**Note:** You can also use distance for the entire workout (e.g., `- run: 46km`) for race simulations or ultra-distance training.
 
 ### Target Formats
 
@@ -212,6 +254,61 @@ Tokens are stored in `~/.garminconnect/` and are valid for approximately 1 year.
 - **Individual workout failures** are logged but don't stop the batch upload
 - **Rate limiting** is handled with automatic delays between API calls
 - **Invalid CSV rows** are skipped with warnings
+
+## Troubleshooting
+
+### "Token expired" or authentication errors
+```bash
+garmin-plan-uploader logout
+# Then run your command again - you'll be prompted for credentials
+```
+
+### Workouts not appearing in Garmin Connect
+- Check that your `--start-date` is a Monday (the tool expects weeks to start on Monday)
+- Verify the date format is `YYYY-MM-DD`
+- Use `--dry-run` first to see what would be uploaded
+
+### Rate limiting / Too many requests
+The tool automatically adds delays between API calls. If you're still hitting limits, wait a few minutes and try again.
+
+### MFA issues
+If you have Multi-Factor Authentication enabled, you'll be prompted for a code. Make sure to enter it quickly as codes expire.
+
+## Using as a Python Library
+
+You can also use the tool programmatically:
+
+```python
+from datetime import date
+from garmin_plan_uploader.auth_manager import GarminSession
+from garmin_plan_uploader.garmin_client import (
+    get_scheduled_workouts_in_range,
+    upload_and_schedule,
+)
+from garmin_plan_uploader.csv_parser import parse_workout_text
+
+# Authenticate
+session = GarminSession()
+session.login()
+
+# List scheduled workouts
+workouts = get_scheduled_workouts_in_range(
+    session, 
+    date(2026, 3, 1), 
+    date(2026, 7, 31)
+)
+for w in workouts:
+    print(f"{w['date']}: {w['title']}")
+
+# Create and upload a single workout
+workout_text = """running: Easy Recovery
+- run: 30:00 @z1
+- note: Keep it easy!"""
+
+workout = parse_workout_text(workout_text)
+workout_id = upload_and_schedule(session, workout, date(2026, 3, 15))
+print(f"Uploaded workout ID: {workout_id}")
+```
 
 ## Development
 

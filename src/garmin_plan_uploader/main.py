@@ -663,6 +663,221 @@ def delete_range(
         console.print("[bold green]Scheduled workouts deleted successfully![/bold green]")
 
 
+@app.command(name="list")
+def list_workouts(
+    start_date: Annotated[
+        str,
+        typer.Argument(
+            help="Start date for listing range (YYYY-MM-DD format, inclusive)",
+        ),
+    ],
+    end_date: Annotated[
+        str,
+        typer.Argument(
+            help="End date for listing range (YYYY-MM-DD format, inclusive)",
+        ),
+    ],
+    username: Annotated[
+        Optional[str],
+        typer.Option(
+            "--username",
+            "-u",
+            help="Garmin Connect email/username",
+            envvar="GARMIN_USERNAME",
+        ),
+    ] = None,
+    password: Annotated[
+        Optional[str],
+        typer.Option(
+            "--password",
+            "-p",
+            help="Garmin Connect password",
+            envvar="GARMIN_PASSWORD",
+            hide_input=True,
+        ),
+    ] = None,
+    group_by_week: Annotated[
+        bool,
+        typer.Option(
+            "--by-week",
+            "-w",
+            help="Group workouts by week",
+        ),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Enable verbose logging",
+        ),
+    ] = False,
+) -> None:
+    """List all scheduled workouts within a date range.
+
+    This shows all workouts scheduled on your Garmin Connect calendar
+    for the specified date range. Useful for reviewing your training plan.
+
+    Example usage:
+
+        garmin-plan-uploader list 2026-03-01 2026-07-31
+
+    To group workouts by week:
+
+        garmin-plan-uploader list 2026-03-01 2026-07-31 --by-week
+    """
+    setup_logging(verbose)
+
+    # Parse dates
+    try:
+        range_start = parse_date(start_date)
+        range_end = parse_date(end_date)
+    except typer.BadParameter as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    if range_end < range_start:
+        console.print("[red]Error:[/red] End date must be on or after start date")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold blue]Garmin Plan Uploader[/bold blue] v{__version__}\n")
+    console.print(f"[cyan]Date range:[/cyan] {range_start} to {range_end}\n")
+
+    # Authenticate
+    console.print("[cyan]Authenticating with Garmin Connect...[/cyan]")
+
+    session = GarminSession()
+
+    try:
+        session.login(email=username, password=password)
+        console.print(f"[green]Logged in as:[/green] {session.get_display_name()}\n")
+
+    except MFARequiredError as e:
+        console.print("[yellow]Multi-Factor Authentication required.[/yellow]")
+        mfa_code = typer.prompt("Enter MFA code")
+        try:
+            session.complete_mfa(e.garmin_client, e.mfa_context, mfa_code.strip())
+            console.print(f"[green]MFA verified. Logged in as:[/green] {session.get_display_name()}\n")
+        except AuthenticationError as mfa_err:
+            console.print(f"[red]MFA verification failed:[/red] {mfa_err}")
+            raise typer.Exit(1)
+
+    except AuthenticationError as e:
+        if "Email and password required" in str(e):
+            console.print("[yellow]No cached tokens found. Please enter your Garmin credentials.[/yellow]\n")
+
+            if not username:
+                username = typer.prompt("Garmin Email")
+            if not password:
+                password = typer.prompt("Garmin Password", hide_input=True)
+
+            try:
+                session.login(email=username, password=password, force_new_login=True)
+                console.print(f"[green]Logged in as:[/green] {session.get_display_name()}\n")
+            except MFARequiredError as e:
+                console.print("[yellow]Multi-Factor Authentication required.[/yellow]")
+                mfa_code = typer.prompt("Enter MFA code")
+                try:
+                    session.complete_mfa(e.garmin_client, e.mfa_context, mfa_code.strip())
+                    console.print(f"[green]Logged in as:[/green] {session.get_display_name()}\n")
+                except AuthenticationError as mfa_err:
+                    console.print(f"[red]MFA verification failed:[/red] {mfa_err}")
+                    raise typer.Exit(1)
+            except AuthenticationError as login_err:
+                console.print(f"[red]Authentication failed:[/red] {login_err}")
+                raise typer.Exit(1)
+        else:
+            console.print(f"[red]Authentication failed:[/red] {e}")
+            raise typer.Exit(1)
+
+    # Fetch scheduled workouts in the range
+    console.print("[cyan]Fetching scheduled workouts...[/cyan]\n")
+
+    try:
+        workouts = get_scheduled_workouts_in_range(session, range_start, range_end)
+    except GarminClientError as e:
+        console.print(f"[red]Error fetching workouts:[/red] {e}")
+        raise typer.Exit(1)
+
+    if not workouts:
+        console.print("[yellow]No scheduled workouts found in this date range.[/yellow]")
+        raise typer.Exit(0)
+
+    # Sort workouts by date
+    sorted_workouts = sorted(workouts, key=lambda w: w.get("date", ""))
+
+    if group_by_week:
+        # Group by ISO week
+        from collections import defaultdict
+        by_week: dict[tuple[int, int], list[dict]] = defaultdict(list)
+
+        for workout in sorted_workouts:
+            workout_date_str = workout.get("date", "")
+            try:
+                workout_date = date.fromisoformat(workout_date_str)
+                week_key = (workout_date.isocalendar()[0], workout_date.isocalendar()[1])
+                by_week[week_key].append(workout)
+            except ValueError:
+                pass
+
+        console.print(f"[bold]Found {len(workouts)} scheduled workout(s) in {len(by_week)} week(s):[/bold]\n")
+
+        for (year, week_num), week_workouts in sorted(by_week.items()):
+            # Calculate the Monday of this week for display
+            from datetime import timedelta
+            first_day = date.fromisocalendar(year, week_num, 1)
+            last_day = date.fromisocalendar(year, week_num, 7)
+
+            table = Table(
+                title=f"Week {week_num} ({first_day.strftime('%b %d')} - {last_day.strftime('%b %d, %Y')})",
+                title_style="bold cyan",
+            )
+            table.add_column("Date", style="cyan", width=12)
+            table.add_column("Day", style="blue", width=10)
+            table.add_column("Workout Name", style="green")
+
+            for workout in sorted(week_workouts, key=lambda w: w.get("date", "")):
+                workout_date_str = workout.get("date", "Unknown")
+                title = workout.get("title", "Untitled")
+
+                try:
+                    workout_date = date.fromisoformat(workout_date_str)
+                    day_name = workout_date.strftime("%A")
+                except ValueError:
+                    day_name = "Unknown"
+
+                table.add_row(workout_date_str, day_name, title)
+
+            console.print(table)
+            console.print()
+
+    else:
+        # Flat list
+        console.print(f"[bold]Found {len(workouts)} scheduled workout(s):[/bold]\n")
+
+        table = Table(title="Scheduled Workouts")
+        table.add_column("Date", style="cyan")
+        table.add_column("Day", style="blue")
+        table.add_column("Workout Name", style="green")
+
+        for workout in sorted_workouts:
+            workout_date_str = workout.get("date", "Unknown")
+            title = workout.get("title", "Untitled")
+
+            try:
+                workout_date = date.fromisoformat(workout_date_str)
+                day_name = workout_date.strftime("%A")
+            except ValueError:
+                day_name = "Unknown"
+
+            table.add_row(workout_date_str, day_name, title)
+
+        console.print(table)
+
+    console.print()
+    console.print(f"[dim]Total: {len(workouts)} workout(s)[/dim]")
+
+
 def main() -> None:
     """Main entry point."""
     app()
