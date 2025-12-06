@@ -10,7 +10,7 @@ import logging
 import sys
 from datetime import date, datetime
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 import typer
 from rich.console import Console
@@ -27,6 +27,10 @@ from .garmin_client import (
     WorkoutScheduleError,
     WorkoutUploadError,
     delete_scheduled_workouts_in_range,
+    delete_workout_templates,
+    download_activities_to_folder,
+    download_planned_workouts_to_folder,
+    get_all_workout_templates,
     get_scheduled_workouts_in_range,
     upload_and_schedule,
 )
@@ -876,6 +880,719 @@ def list_workouts(
 
     console.print()
     console.print(f"[dim]Total: {len(workouts)} workout(s)[/dim]")
+
+
+@app.command()
+def download(
+    start_date: Annotated[
+        str,
+        typer.Argument(
+            help="Start date for download range (YYYY-MM-DD format, inclusive)",
+        ),
+    ],
+    end_date: Annotated[
+        str,
+        typer.Argument(
+            help="End date for download range (YYYY-MM-DD format, inclusive)",
+        ),
+    ],
+    username: Annotated[
+        Optional[str],
+        typer.Option(
+            "--username",
+            "-u",
+            help="Garmin Connect email/username",
+            envvar="GARMIN_USERNAME",
+        ),
+    ] = None,
+    password: Annotated[
+        Optional[str],
+        typer.Option(
+            "--password",
+            "-p",
+            help="Garmin Connect password",
+            envvar="GARMIN_PASSWORD",
+            hide_input=True,
+        ),
+    ] = None,
+    output_dir: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--output",
+            "-o",
+            help="Output directory (default: workouts/{start}_{end})",
+        ),
+    ] = None,
+    include_planned: Annotated[
+        bool,
+        typer.Option(
+            "--include-planned",
+            "-P",
+            help="Also download planned/scheduled workouts (default: only completed activities)",
+        ),
+    ] = False,
+    activity_type: Annotated[
+        Optional[str],
+        typer.Option(
+            "--activity-type",
+            "-t",
+            help="Filter by activity type (e.g., running, cycling, swimming)",
+        ),
+    ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Enable verbose logging",
+        ),
+    ] = False,
+) -> None:
+    """Download completed activities (and optionally planned workouts) from Garmin Connect.
+
+    By default, downloads completed activities (runs, rides, etc.) within the date range.
+    Use --include-planned to also download scheduled workout definitions.
+
+    For each completed activity, downloads:
+    - JSON file with activity metadata
+    - FIT file (original data, as .zip)
+    - GPX file (for outdoor activities with GPS data)
+
+    For planned workouts (with --include-planned):
+    - JSON file with workout definition
+    - FIT file for syncing to device
+
+    Files are organized into:
+    - workouts/{start}_{end}/activities/ - completed activities
+    - workouts/{start}_{end}/planned/ - scheduled workouts (if --include-planned)
+
+    Example usage:
+
+        # Download all completed activities from last month
+        garmin-plan-uploader download 2024-11-01 2024-11-30
+
+        # Download only running activities
+        garmin-plan-uploader download 2024-11-01 2024-11-30 --activity-type running
+
+        # Include planned workouts too
+        garmin-plan-uploader download 2024-11-01 2024-11-30 --include-planned
+
+        # Custom output directory
+        garmin-plan-uploader download 2024-11-01 2024-11-30 -o ./my-backup
+    """
+    setup_logging(verbose)
+    logger = logging.getLogger(__name__)
+
+    # Parse dates
+    try:
+        range_start = parse_date(start_date)
+        range_end = parse_date(end_date)
+    except typer.BadParameter as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    if range_end < range_start:
+        console.print("[red]Error:[/red] End date must be on or after start date")
+        raise typer.Exit(1)
+
+    # Determine output directory
+    if output_dir is None:
+        output_dir = Path("workouts") / f"{range_start}_{range_end}"
+
+    console.print(f"\n[bold blue]Garmin Plan Uploader[/bold blue] v{__version__}\n")
+    console.print(f"[cyan]Date range:[/cyan] {range_start} to {range_end}")
+    console.print(f"[cyan]Output directory:[/cyan] {output_dir}")
+    if activity_type:
+        console.print(f"[cyan]Activity type filter:[/cyan] {activity_type}")
+    console.print()
+
+    # Authenticate
+    console.print("[cyan]Authenticating with Garmin Connect...[/cyan]")
+
+    session = GarminSession()
+
+    try:
+        session.login(email=username, password=password)
+        console.print(f"[green]Logged in as:[/green] {session.get_display_name()}\n")
+
+    except MFARequiredError as e:
+        console.print("[yellow]Multi-Factor Authentication required.[/yellow]")
+        mfa_code = typer.prompt("Enter MFA code")
+        try:
+            session.complete_mfa(e.garmin_client, e.mfa_context, mfa_code.strip())
+            console.print(f"[green]MFA verified. Logged in as:[/green] {session.get_display_name()}\n")
+        except AuthenticationError as mfa_err:
+            console.print(f"[red]MFA verification failed:[/red] {mfa_err}")
+            raise typer.Exit(1)
+
+    except AuthenticationError as e:
+        if "Email and password required" in str(e):
+            console.print("[yellow]No cached tokens found. Please enter your Garmin credentials.[/yellow]\n")
+
+            if not username:
+                username = typer.prompt("Garmin Email")
+            if not password:
+                password = typer.prompt("Garmin Password", hide_input=True)
+
+            try:
+                session.login(email=username, password=password, force_new_login=True)
+                console.print(f"[green]Logged in as:[/green] {session.get_display_name()}\n")
+            except MFARequiredError as e:
+                console.print("[yellow]Multi-Factor Authentication required.[/yellow]")
+                mfa_code = typer.prompt("Enter MFA code")
+                try:
+                    session.complete_mfa(e.garmin_client, e.mfa_context, mfa_code.strip())
+                    console.print(f"[green]Logged in as:[/green] {session.get_display_name()}\n")
+                except AuthenticationError as mfa_err:
+                    console.print(f"[red]MFA verification failed:[/red] {mfa_err}")
+                    raise typer.Exit(1)
+            except AuthenticationError as login_err:
+                console.print(f"[red]Authentication failed:[/red] {login_err}")
+                raise typer.Exit(1)
+        else:
+            console.print(f"[red]Authentication failed:[/red] {e}")
+            raise typer.Exit(1)
+
+    # Download completed activities
+    console.print("[cyan]Downloading completed activities...[/cyan]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Fetching activities...", total=None)
+
+        def activity_progress(current: int, total: int, name: str) -> None:
+            progress.update(task, total=total, completed=current)
+            progress.update(task, description=f"[cyan]{name[:40]}[/cyan]...")
+
+        try:
+            activity_stats = download_activities_to_folder(
+                session,
+                range_start,
+                range_end,
+                output_dir,
+                activity_type=activity_type,
+                progress_callback=activity_progress,
+            )
+        except GarminClientError as e:
+            console.print(f"[red]Error downloading activities:[/red] {e}")
+            raise typer.Exit(1)
+
+    # Show activity summary
+    console.print()
+    console.print("[bold]Completed Activities:[/bold]")
+    console.print(f"  [green]✓ Downloaded:[/green] {activity_stats['activities']} activities")
+    console.print(f"  [green]✓ Files created:[/green] {activity_stats['files']}")
+
+    if activity_stats["total_distance_m"] > 0:
+        distance_km = activity_stats["total_distance_m"] / 1000
+        console.print(f"  [cyan]Total distance:[/cyan] {distance_km:.1f} km")
+
+    if activity_stats["total_duration_s"] > 0:
+        hours = int(activity_stats["total_duration_s"] // 3600)
+        minutes = int((activity_stats["total_duration_s"] % 3600) // 60)
+        console.print(f"  [cyan]Total duration:[/cyan] {hours}h {minutes}m")
+
+    if activity_stats["errors"]:
+        console.print(f"  [yellow]⚠ Errors:[/yellow] {len(activity_stats['errors'])}")
+        for err in activity_stats["errors"][:5]:  # Show first 5 errors
+            console.print(f"    • {err}")
+        if len(activity_stats["errors"]) > 5:
+            console.print(f"    ... and {len(activity_stats['errors']) - 5} more")
+
+    # Download planned workouts if requested
+    if include_planned:
+        console.print()
+        console.print("[cyan]Downloading planned workouts...[/cyan]\n")
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Fetching workouts...", total=None)
+
+            def workout_progress(current: int, total: int, name: str) -> None:
+                progress.update(task, total=total, completed=current)
+                progress.update(task, description=f"[cyan]{name[:40]}[/cyan]...")
+
+            try:
+                workout_stats = download_planned_workouts_to_folder(
+                    session,
+                    range_start,
+                    range_end,
+                    output_dir,
+                    progress_callback=workout_progress,
+                )
+            except GarminClientError as e:
+                console.print(f"[red]Error downloading workouts:[/red] {e}")
+                raise typer.Exit(1)
+
+        console.print()
+        console.print("[bold]Planned Workouts:[/bold]")
+        console.print(f"  [green]✓ Downloaded:[/green] {workout_stats['workouts']} workouts")
+        console.print(f"  [green]✓ Files created:[/green] {workout_stats['files']}")
+
+        if workout_stats["errors"]:
+            console.print(f"  [yellow]⚠ Errors:[/yellow] {len(workout_stats['errors'])}")
+            for err in workout_stats["errors"][:5]:
+                console.print(f"    • {err}")
+
+    # Final summary
+    console.print()
+    console.print(f"[bold green]Download complete![/bold green]")
+    console.print(f"Files saved to: [cyan]{output_dir.absolute()}[/cyan]")
+
+
+@app.command(name="list-templates")
+def list_templates(
+    username: Annotated[
+        Optional[str],
+        typer.Option(
+            "--username",
+            "-u",
+            help="Garmin Connect email/username",
+            envvar="GARMIN_USERNAME",
+        ),
+    ] = None,
+    password: Annotated[
+        Optional[str],
+        typer.Option(
+            "--password",
+            "-p",
+            help="Garmin Connect password",
+            envvar="GARMIN_PASSWORD",
+            hide_input=True,
+        ),
+    ] = None,
+    name_contains: Annotated[
+        Optional[str],
+        typer.Option(
+            "--name-contains",
+            "-n",
+            help="Filter to workouts containing this text in the name",
+        ),
+    ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Enable verbose logging",
+        ),
+    ] = False,
+) -> None:
+    """List all saved workout templates in your Garmin library.
+
+    These are workout definitions saved in your account, separate from
+    scheduled workouts on the calendar. Useful for seeing what workouts
+    have accumulated and identifying ones to delete.
+
+    Example usage:
+
+        # List all workout templates
+        garmin-plan-uploader list-templates
+
+        # Filter by name
+        garmin-plan-uploader list-templates --name-contains "Easy"
+    """
+    setup_logging(verbose)
+
+    console.print(f"\n[bold blue]Garmin Plan Uploader[/bold blue] v{__version__}\n")
+
+    # Authenticate
+    console.print("[cyan]Authenticating with Garmin Connect...[/cyan]")
+
+    session = GarminSession()
+
+    try:
+        session.login(email=username, password=password)
+        console.print(f"[green]Logged in as:[/green] {session.get_display_name()}\n")
+
+    except MFARequiredError as e:
+        console.print("[yellow]Multi-Factor Authentication required.[/yellow]")
+        mfa_code = typer.prompt("Enter MFA code")
+        try:
+            session.complete_mfa(e.garmin_client, e.mfa_context, mfa_code.strip())
+            console.print(f"[green]MFA verified. Logged in as:[/green] {session.get_display_name()}\n")
+        except AuthenticationError as mfa_err:
+            console.print(f"[red]MFA verification failed:[/red] {mfa_err}")
+            raise typer.Exit(1)
+
+    except AuthenticationError as e:
+        if "Email and password required" in str(e):
+            console.print("[yellow]No cached tokens found. Please enter your Garmin credentials.[/yellow]\n")
+
+            if not username:
+                username = typer.prompt("Garmin Email")
+            if not password:
+                password = typer.prompt("Garmin Password", hide_input=True)
+
+            try:
+                session.login(email=username, password=password, force_new_login=True)
+                console.print(f"[green]Logged in as:[/green] {session.get_display_name()}\n")
+            except MFARequiredError as e:
+                console.print("[yellow]Multi-Factor Authentication required.[/yellow]")
+                mfa_code = typer.prompt("Enter MFA code")
+                try:
+                    session.complete_mfa(e.garmin_client, e.mfa_context, mfa_code.strip())
+                    console.print(f"[green]Logged in as:[/green] {session.get_display_name()}\n")
+                except AuthenticationError as mfa_err:
+                    console.print(f"[red]MFA verification failed:[/red] {mfa_err}")
+                    raise typer.Exit(1)
+            except AuthenticationError as login_err:
+                console.print(f"[red]Authentication failed:[/red] {login_err}")
+                raise typer.Exit(1)
+        else:
+            console.print(f"[red]Authentication failed:[/red] {e}")
+            raise typer.Exit(1)
+
+    # Fetch all workout templates
+    console.print("[cyan]Fetching workout templates...[/cyan]\n")
+
+    try:
+        workouts = get_all_workout_templates(session)
+    except GarminClientError as e:
+        console.print(f"[red]Error fetching workouts:[/red] {e}")
+        raise typer.Exit(1)
+
+    if not workouts:
+        console.print("[yellow]No workout templates found in your library.[/yellow]")
+        raise typer.Exit(0)
+
+    # Filter by name if specified
+    if name_contains:
+        name_filter = name_contains.lower()
+        workouts = [w for w in workouts if name_filter in w.get("workoutName", "").lower()]
+
+        if not workouts:
+            console.print(f"[yellow]No workouts found containing '{name_contains}'.[/yellow]")
+            raise typer.Exit(0)
+
+    # Sort by name
+    sorted_workouts = sorted(workouts, key=lambda w: w.get("workoutName", "").lower())
+
+    console.print(f"[bold]Found {len(sorted_workouts)} workout template(s):[/bold]\n")
+
+    table = Table(title="Workout Templates")
+    table.add_column("#", style="dim", justify="right", width=4)
+    table.add_column("Workout ID", style="dim", width=12)
+    table.add_column("Name", style="green")
+    table.add_column("Sport", style="blue", width=10)
+    table.add_column("Steps", style="yellow", justify="right", width=6)
+
+    for i, workout in enumerate(sorted_workouts, 1):
+        workout_id = str(workout.get("workoutId", "N/A"))
+        name = workout.get("workoutName", "Untitled")
+        sport_type = workout.get("sportType", {})
+        sport = sport_type.get("sportTypeKey", "unknown") if isinstance(sport_type, dict) else "unknown"
+        
+        # Count steps
+        segments = workout.get("workoutSegments", [])
+        step_count = 0
+        for segment in segments:
+            step_count += len(segment.get("workoutSteps", []))
+
+        table.add_row(str(i), workout_id, name, sport, str(step_count))
+
+    console.print(table)
+    console.print()
+    console.print(f"[dim]Total: {len(sorted_workouts)} workout template(s)[/dim]")
+
+
+@app.command(name="delete-templates")
+def delete_templates(
+    username: Annotated[
+        Optional[str],
+        typer.Option(
+            "--username",
+            "-u",
+            help="Garmin Connect email/username",
+            envvar="GARMIN_USERNAME",
+        ),
+    ] = None,
+    password: Annotated[
+        Optional[str],
+        typer.Option(
+            "--password",
+            "-p",
+            help="Garmin Connect password",
+            envvar="GARMIN_PASSWORD",
+            hide_input=True,
+        ),
+    ] = None,
+    all_templates: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            "-a",
+            help="Delete ALL unused workout templates",
+        ),
+    ] = False,
+    name_contains: Annotated[
+        Optional[str],
+        typer.Option(
+            "--name-contains",
+            "-n",
+            help="Delete only unused workouts containing this text in the name",
+        ),
+    ] = None,
+    include_scheduled: Annotated[
+        bool,
+        typer.Option(
+            "--include-scheduled",
+            help="DANGEROUS: Also delete templates that are scheduled for future workouts",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Show what would be deleted without actually deleting",
+        ),
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="Skip confirmation prompt",
+        ),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Enable verbose logging",
+        ),
+    ] = False,
+) -> None:
+    """Delete unused workout templates from your Garmin library.
+
+    By default, only deletes templates that are NOT scheduled for any future
+    workouts. This is safe and won't affect your training plan.
+
+    Use --include-scheduled to also delete templates that have future scheduled
+    workouts (dangerous - will orphan those calendar entries).
+
+    WARNING: Deletion cannot be undone! Use --dry-run first to preview.
+
+    Example usage:
+
+        # Preview unused templates that would be deleted
+        garmin-plan-uploader delete-templates --all --dry-run
+
+        # Delete all unused templates containing "Test"
+        garmin-plan-uploader delete-templates --name-contains "Test"
+
+        # Delete ALL unused templates
+        garmin-plan-uploader delete-templates --all --yes
+
+        # DANGEROUS: Delete including scheduled ones
+        garmin-plan-uploader delete-templates --all --include-scheduled --yes
+    """
+    setup_logging(verbose)
+
+    if not all_templates and not name_contains:
+        console.print("[red]Error:[/red] Must specify --all or --name-contains")
+        console.print("Use --dry-run to preview what would be deleted.")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold blue]Garmin Plan Uploader[/bold blue] v{__version__}\n")
+
+    # Authenticate
+    console.print("[cyan]Authenticating with Garmin Connect...[/cyan]")
+
+    session = GarminSession()
+
+    try:
+        session.login(email=username, password=password)
+        console.print(f"[green]Logged in as:[/green] {session.get_display_name()}\n")
+
+    except MFARequiredError as e:
+        console.print("[yellow]Multi-Factor Authentication required.[/yellow]")
+        mfa_code = typer.prompt("Enter MFA code")
+        try:
+            session.complete_mfa(e.garmin_client, e.mfa_context, mfa_code.strip())
+            console.print(f"[green]MFA verified. Logged in as:[/green] {session.get_display_name()}\n")
+        except AuthenticationError as mfa_err:
+            console.print(f"[red]MFA verification failed:[/red] {mfa_err}")
+            raise typer.Exit(1)
+
+    except AuthenticationError as e:
+        if "Email and password required" in str(e):
+            console.print("[yellow]No cached tokens found. Please enter your Garmin credentials.[/yellow]\n")
+
+            if not username:
+                username = typer.prompt("Garmin Email")
+            if not password:
+                password = typer.prompt("Garmin Password", hide_input=True)
+
+            try:
+                session.login(email=username, password=password, force_new_login=True)
+                console.print(f"[green]Logged in as:[/green] {session.get_display_name()}\n")
+            except MFARequiredError as e:
+                console.print("[yellow]Multi-Factor Authentication required.[/yellow]")
+                mfa_code = typer.prompt("Enter MFA code")
+                try:
+                    session.complete_mfa(e.garmin_client, e.mfa_context, mfa_code.strip())
+                    console.print(f"[green]Logged in as:[/green] {session.get_display_name()}\n")
+                except AuthenticationError as mfa_err:
+                    console.print(f"[red]MFA verification failed:[/red] {mfa_err}")
+                    raise typer.Exit(1)
+            except AuthenticationError as login_err:
+                console.print(f"[red]Authentication failed:[/red] {login_err}")
+                raise typer.Exit(1)
+        else:
+            console.print(f"[red]Authentication failed:[/red] {e}")
+            raise typer.Exit(1)
+
+    # Fetch all workout templates
+    console.print("[cyan]Fetching workout templates...[/cyan]")
+
+    try:
+        workouts = get_all_workout_templates(session)
+    except GarminClientError as e:
+        console.print(f"[red]Error fetching workouts:[/red] {e}")
+        raise typer.Exit(1)
+
+    if not workouts:
+        console.print("[yellow]No workout templates found in your library.[/yellow]")
+        raise typer.Exit(0)
+
+    # Filter by name if specified
+    if name_contains:
+        name_filter = name_contains.lower()
+        workouts = [w for w in workouts if name_filter in w.get("workoutName", "").lower()]
+
+        if not workouts:
+            console.print(f"[yellow]No workouts found containing '{name_contains}'.[/yellow]")
+            raise typer.Exit(0)
+
+    # Filter out scheduled workouts (unless --include-scheduled is set)
+    if not include_scheduled:
+        console.print("[cyan]Checking for scheduled workouts (this may take a moment)...[/cyan]")
+        
+        # Get all future scheduled workouts (from today to 2 years out)
+        from datetime import timedelta
+        today = date.today()
+        future_end = today + timedelta(days=730)  # ~2 years
+        
+        try:
+            scheduled = get_scheduled_workouts_in_range(session, today, future_end)
+            scheduled_workout_ids = {
+                item.get("workoutId") for item in scheduled if item.get("workoutId")
+            }
+            
+            original_count = len(workouts)
+            workouts = [
+                w for w in workouts 
+                if w.get("workoutId") not in scheduled_workout_ids
+            ]
+            
+            skipped = original_count - len(workouts)
+            if skipped > 0:
+                console.print(f"[dim]Skipping {skipped} template(s) that are scheduled for future workouts.[/dim]")
+            
+        except GarminClientError as e:
+            console.print(f"[yellow]Warning: Could not check scheduled workouts: {e}[/yellow]")
+            console.print("[yellow]Proceeding with all templates (use --include-scheduled to suppress this check).[/yellow]")
+
+    if not workouts:
+        console.print("[green]No unused workout templates to delete.[/green]")
+        raise typer.Exit(0)
+
+    # Sort and display
+    sorted_workouts = sorted(workouts, key=lambda w: w.get("workoutName", "").lower())
+
+    title_suffix = " (UNUSED ONLY)" if not include_scheduled else " (INCLUDING SCHEDULED)"
+    if dry_run:
+        title_suffix += " - DRY RUN"
+
+    console.print()
+    console.print(f"[bold]Found {len(sorted_workouts)} workout template(s) to delete{title_suffix}:[/bold]\n")
+
+    table = Table(title="Workouts to Delete" + title_suffix)
+    table.add_column("#", style="dim", justify="right", width=4)
+    table.add_column("Workout ID", style="dim", width=12)
+    table.add_column("Name", style="red" if not dry_run else "yellow")
+
+    for i, workout in enumerate(sorted_workouts, 1):
+        workout_id = str(workout.get("workoutId", "N/A"))
+        name = workout.get("workoutName", "Untitled")
+        table.add_row(str(i), workout_id, name)
+
+    console.print(table)
+    console.print()
+
+    if dry_run:
+        console.print("[yellow]Dry run mode - no workouts deleted.[/yellow]")
+        raise typer.Exit(0)
+
+    # Confirm deletion
+    if not yes:
+        console.print("[bold red]⚠ WARNING: This action cannot be undone![/bold red]\n")
+        confirm = typer.confirm(
+            f"Delete {len(sorted_workouts)} workout template(s)?",
+            default=False,
+        )
+        if not confirm:
+            console.print("[yellow]Deletion cancelled.[/yellow]")
+            raise typer.Exit(0)
+
+    # Delete workouts with progress
+    console.print("\n[cyan]Deleting workout templates...[/cyan]\n")
+
+    workout_ids = [w.get("workoutId") for w in sorted_workouts if w.get("workoutId")]
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Deleting...", total=len(workout_ids))
+
+        stats: dict[str, Any] = {"deleted": 0, "failed": 0, "errors": []}
+
+        for i, workout in enumerate(sorted_workouts):
+            workout_id = workout.get("workoutId")
+            name = workout.get("workoutName", "Untitled")
+
+            progress.update(task, description=f"[cyan]{name[:40]}[/cyan]...")
+
+            if workout_id:
+                try:
+                    from .garmin_client import delete_workout
+                    delete_workout(session, str(workout_id))
+                    stats["deleted"] += 1
+                except GarminClientError as e:
+                    stats["failed"] += 1
+                    stats["errors"].append(f"{name}: {e}")
+
+            progress.advance(task)
+
+    # Summary
+    console.print()
+    console.print("[bold]Deletion Summary:[/bold]")
+    console.print(f"  [green]✓ Deleted:[/green] {stats['deleted']}")
+
+    if stats["failed"] > 0:
+        console.print(f"  [red]✗ Failed:[/red] {stats['failed']}")
+        for err in stats["errors"][:5]:
+            console.print(f"    • {err}")
+
+    if stats["deleted"] > 0:
+        console.print()
+        console.print("[bold green]Workout templates deleted successfully![/bold green]")
 
 
 def main() -> None:

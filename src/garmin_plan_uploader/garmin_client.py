@@ -6,9 +6,12 @@ and the actual API calls to create and schedule workouts.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from .auth_manager import GarminSession
@@ -237,6 +240,80 @@ def find_workout_by_name(
         return None
 
 
+def get_all_workout_templates(
+    session: GarminSession,
+    batch_size: int = 100,
+) -> list[dict[str, Any]]:
+    """Get ALL workout templates from the library (with pagination).
+
+    This fetches all saved workout definitions, not scheduled instances.
+
+    Args:
+        session: Authenticated GarminSession
+        batch_size: Number of workouts to fetch per request
+
+    Returns:
+        List of all workout dictionaries
+
+    Raises:
+        GarminClientError: If request fails
+    """
+    all_workouts: list[dict[str, Any]] = []
+    start = 0
+
+    while True:
+        batch = get_existing_workouts(session, start=start, limit=batch_size)
+        if not batch:
+            break
+        all_workouts.extend(batch)
+        if len(batch) < batch_size:
+            break
+        start += batch_size
+
+    return all_workouts
+
+
+def delete_workout_templates(
+    session: GarminSession,
+    workout_ids: list[str | int],
+    *,
+    delay: float = API_DELAY_SECONDS,
+) -> dict[str, Any]:
+    """Delete multiple workout templates by ID.
+
+    Args:
+        session: Authenticated GarminSession
+        workout_ids: List of workout IDs to delete
+        delay: Delay between deletions for rate limiting
+
+    Returns:
+        Dictionary with deletion statistics:
+        - "deleted": number successfully deleted
+        - "failed": number that failed
+        - "errors": list of error messages
+    """
+    stats: dict[str, Any] = {
+        "deleted": 0,
+        "failed": 0,
+        "errors": [],
+    }
+
+    for workout_id in workout_ids:
+        try:
+            delete_workout(session, str(workout_id))
+            stats["deleted"] += 1
+
+            if delay > 0:
+                time.sleep(delay)
+
+        except GarminClientError as e:
+            stats["failed"] += 1
+            stats["errors"].append(f"Workout {workout_id}: {e}")
+            logger.error(f"Failed to delete workout {workout_id}: {e}")
+
+    return stats
+
+
 def get_calendar_items(
     session: GarminSession,
     year: int,
@@ -419,3 +496,396 @@ def delete_scheduled_workouts_in_range(
             logger.error(f"Failed to delete '{title}' ({workout_date}): {e}")
 
     return deleted_count
+
+
+# =============================================================================
+# Activity Download Functions
+# =============================================================================
+
+
+def sanitize_filename(name: str) -> str:
+    """Sanitize a string for use as a filename.
+
+    Args:
+        name: Original name (e.g., workout name)
+
+    Returns:
+        Sanitized string safe for filesystem use
+    """
+    # Replace problematic characters with underscores
+    sanitized = re.sub(r'[<>:"/\\|?*]', '_', name)
+    # Replace multiple spaces/underscores with single underscore
+    sanitized = re.sub(r'[\s_]+', '_', sanitized)
+    # Remove leading/trailing underscores and spaces
+    sanitized = sanitized.strip('_ ')
+    # Limit length to avoid filesystem issues
+    if len(sanitized) > 100:
+        sanitized = sanitized[:100]
+    return sanitized or "unnamed"
+
+
+def get_activities_in_range(
+    session: GarminSession,
+    start_date: date,
+    end_date: date,
+    activity_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """Get completed activities within a date range.
+
+    Args:
+        session: Authenticated GarminSession
+        start_date: Start of date range (inclusive)
+        end_date: End of date range (inclusive)
+        activity_type: Optional filter by activity type (e.g., "running", "cycling")
+
+    Returns:
+        List of activity dictionaries
+
+    Raises:
+        GarminClientError: If request fails
+    """
+    try:
+        activities = session.client.get_activities_by_date(
+            startdate=start_date.isoformat(),
+            enddate=end_date.isoformat(),
+            activitytype=activity_type,
+        )
+        return activities if activities else []
+    except Exception as e:
+        raise GarminClientError(f"Failed to get activities: {e}") from e
+
+
+def get_activity_details(
+    session: GarminSession,
+    activity_id: int | str,
+) -> dict[str, Any]:
+    """Get detailed information about a specific activity.
+
+    Args:
+        session: Authenticated GarminSession
+        activity_id: The activity ID
+
+    Returns:
+        Activity details dictionary
+
+    Raises:
+        GarminClientError: If request fails
+    """
+    try:
+        return session.client.get_activity(activity_id)
+    except Exception as e:
+        raise GarminClientError(f"Failed to get activity {activity_id}: {e}") from e
+
+
+def download_activity_file(
+    session: GarminSession,
+    activity_id: int | str,
+    file_format: str = "ORIGINAL",
+) -> bytes:
+    """Download an activity file in the specified format.
+
+    Args:
+        session: Authenticated GarminSession
+        activity_id: The activity ID
+        file_format: Format to download: "ORIGINAL" (FIT), "TCX", "GPX", "KML", "CSV"
+
+    Returns:
+        Raw file bytes
+
+    Raises:
+        GarminClientError: If download fails
+    """
+    from garminconnect import Garmin
+
+    try:
+        # Map format strings to garminconnect enum
+        format_map = {
+            "ORIGINAL": Garmin.ActivityDownloadFormat.ORIGINAL,
+            "FIT": Garmin.ActivityDownloadFormat.ORIGINAL,
+            "TCX": Garmin.ActivityDownloadFormat.TCX,
+            "GPX": Garmin.ActivityDownloadFormat.GPX,
+            "KML": Garmin.ActivityDownloadFormat.KML,
+            "CSV": Garmin.ActivityDownloadFormat.CSV,
+        }
+        dl_fmt = format_map.get(file_format.upper(), Garmin.ActivityDownloadFormat.ORIGINAL)
+        return session.client.download_activity(activity_id, dl_fmt=dl_fmt)
+    except Exception as e:
+        raise GarminClientError(
+            f"Failed to download activity {activity_id} as {file_format}: {e}"
+        ) from e
+
+
+def get_workout_details(
+    session: GarminSession,
+    workout_id: int | str,
+) -> dict[str, Any]:
+    """Get detailed information about a workout definition.
+
+    Args:
+        session: Authenticated GarminSession
+        workout_id: The workout ID
+
+    Returns:
+        Workout details dictionary
+
+    Raises:
+        GarminClientError: If request fails
+    """
+    try:
+        url = f"/workout-service/workout/{workout_id}"
+        response = session.garth.connectapi(url)
+        return response
+    except Exception as e:
+        raise GarminClientError(f"Failed to get workout {workout_id}: {e}") from e
+
+
+def download_workout_file(
+    session: GarminSession,
+    workout_id: int | str,
+) -> bytes:
+    """Download a workout as a FIT file.
+
+    Args:
+        session: Authenticated GarminSession
+        workout_id: The workout ID
+
+    Returns:
+        Raw FIT file bytes
+
+    Raises:
+        GarminClientError: If download fails
+    """
+    try:
+        url = f"/workout-service/workout/FIT/{workout_id}"
+        response = session.garth.get("connectapi", url, api=True)
+        return response.content
+    except Exception as e:
+        raise GarminClientError(
+            f"Failed to download workout {workout_id} as FIT: {e}"
+        ) from e
+
+
+def has_gps_data(activity: dict[str, Any]) -> bool:
+    """Check if an activity has GPS/polyline data.
+
+    Args:
+        activity: Activity dictionary from Garmin API
+
+    Returns:
+        True if activity has GPS data
+    """
+    return activity.get("hasPolyline", False) or activity.get("startLatitude") is not None
+
+
+def download_activities_to_folder(
+    session: GarminSession,
+    start_date: date,
+    end_date: date,
+    output_dir: Path,
+    activity_type: str | None = None,
+    *,
+    delay: float = API_DELAY_SECONDS,
+    progress_callback: Any | None = None,
+) -> dict[str, Any]:
+    """Download all completed activities in a date range to a folder.
+
+    For each activity, downloads:
+    - JSON metadata file
+    - FIT file (original data)
+    - GPX file (if activity has GPS data, for outdoor activities)
+
+    Args:
+        session: Authenticated GarminSession
+        start_date: Start of date range (inclusive)
+        end_date: End of date range (inclusive)
+        output_dir: Directory to save files
+        activity_type: Optional filter by activity type
+        delay: Delay between API calls for rate limiting
+        progress_callback: Optional callback(current, total, activity_name) for progress updates
+
+    Returns:
+        Dictionary with download statistics:
+        - "activities": number of activities downloaded
+        - "files": total number of files created
+        - "errors": list of error messages
+        - "total_distance_m": total distance in meters
+        - "total_duration_s": total duration in seconds
+
+    Raises:
+        GarminClientError: If fetching activities fails
+    """
+    # Create output directory
+    activities_dir = output_dir / "activities"
+    activities_dir.mkdir(parents=True, exist_ok=True)
+
+    # Get activities
+    activities = get_activities_in_range(session, start_date, end_date, activity_type)
+
+    stats = {
+        "activities": 0,
+        "files": 0,
+        "errors": [],
+        "total_distance_m": 0.0,
+        "total_duration_s": 0.0,
+    }
+
+    for i, activity in enumerate(activities):
+        activity_id = activity.get("activityId")
+        activity_name = activity.get("activityName", "Unnamed")
+        activity_date = activity.get("startTimeLocal", "")[:10]  # YYYY-MM-DD
+
+        if progress_callback:
+            progress_callback(i, len(activities), activity_name)
+
+        if not activity_id:
+            stats["errors"].append(f"Activity missing ID: {activity_name}")
+            continue
+
+        # Create safe filename prefix
+        safe_name = sanitize_filename(activity_name)
+        file_prefix = f"{activity_date}_{safe_name}"
+
+        try:
+            # Save JSON metadata
+            json_path = activities_dir / f"{file_prefix}.json"
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(activity, f, indent=2, ensure_ascii=False)
+            stats["files"] += 1
+
+            if delay > 0:
+                time.sleep(delay / 2)  # Shorter delay for metadata
+
+            # Download FIT file
+            try:
+                fit_data = download_activity_file(session, activity_id, "ORIGINAL")
+                # FIT downloads come as a zip, save as .zip
+                fit_path = activities_dir / f"{file_prefix}.zip"
+                with open(fit_path, "wb") as f:
+                    f.write(fit_data)
+                stats["files"] += 1
+            except GarminClientError as e:
+                stats["errors"].append(f"FIT download failed for {activity_name}: {e}")
+
+            if delay > 0:
+                time.sleep(delay)
+
+            # Download GPX if activity has GPS data
+            if has_gps_data(activity):
+                try:
+                    gpx_data = download_activity_file(session, activity_id, "GPX")
+                    gpx_path = activities_dir / f"{file_prefix}.gpx"
+                    with open(gpx_path, "wb") as f:
+                        f.write(gpx_data)
+                    stats["files"] += 1
+                except GarminClientError as e:
+                    stats["errors"].append(f"GPX download failed for {activity_name}: {e}")
+
+                if delay > 0:
+                    time.sleep(delay)
+
+            # Update statistics
+            stats["activities"] += 1
+            stats["total_distance_m"] += activity.get("distance", 0) or 0
+            stats["total_duration_s"] += activity.get("duration", 0) or 0
+
+        except Exception as e:
+            stats["errors"].append(f"Error processing {activity_name}: {e}")
+            logger.error(f"Error downloading activity {activity_name}: {e}")
+
+    return stats
+
+
+def download_planned_workouts_to_folder(
+    session: GarminSession,
+    start_date: date,
+    end_date: date,
+    output_dir: Path,
+    *,
+    delay: float = API_DELAY_SECONDS,
+    progress_callback: Any | None = None,
+) -> dict[str, Any]:
+    """Download all scheduled (planned) workouts in a date range to a folder.
+
+    For each scheduled workout, downloads:
+    - JSON metadata file with full workout definition
+    - FIT file for syncing to device
+
+    Args:
+        session: Authenticated GarminSession
+        start_date: Start of date range (inclusive)
+        end_date: End of date range (inclusive)
+        output_dir: Directory to save files
+        delay: Delay between API calls for rate limiting
+        progress_callback: Optional callback(current, total, workout_name) for progress updates
+
+    Returns:
+        Dictionary with download statistics:
+        - "workouts": number of workouts downloaded
+        - "files": total number of files created
+        - "errors": list of error messages
+
+    Raises:
+        GarminClientError: If fetching workouts fails
+    """
+    # Create output directory
+    planned_dir = output_dir / "planned"
+    planned_dir.mkdir(parents=True, exist_ok=True)
+
+    # Get scheduled workouts
+    scheduled = get_scheduled_workouts_in_range(session, start_date, end_date)
+
+    stats = {
+        "workouts": 0,
+        "files": 0,
+        "errors": [],
+    }
+
+    for i, item in enumerate(scheduled):
+        workout_id = item.get("workoutId")
+        workout_name = item.get("title", "Unnamed")
+        workout_date = item.get("date", "unknown")
+
+        if progress_callback:
+            progress_callback(i, len(scheduled), workout_name)
+
+        if not workout_id:
+            stats["errors"].append(f"Scheduled workout missing workoutId: {workout_name}")
+            continue
+
+        # Create safe filename prefix
+        safe_name = sanitize_filename(workout_name)
+        file_prefix = f"{workout_date}_{safe_name}"
+
+        try:
+            # Get full workout details
+            workout_details = get_workout_details(session, workout_id)
+
+            if delay > 0:
+                time.sleep(delay)
+
+            # Save JSON metadata
+            json_path = planned_dir / f"{file_prefix}.json"
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(workout_details, f, indent=2, ensure_ascii=False)
+            stats["files"] += 1
+
+            # Download FIT file
+            try:
+                fit_data = download_workout_file(session, workout_id)
+                fit_path = planned_dir / f"{file_prefix}.fit"
+                with open(fit_path, "wb") as f:
+                    f.write(fit_data)
+                stats["files"] += 1
+            except GarminClientError as e:
+                stats["errors"].append(f"FIT download failed for {workout_name}: {e}")
+
+            if delay > 0:
+                time.sleep(delay)
+
+            stats["workouts"] += 1
+
+        except Exception as e:
+            stats["errors"].append(f"Error processing {workout_name}: {e}")
+            logger.error(f"Error downloading workout {workout_name}: {e}")
+
+    return stats

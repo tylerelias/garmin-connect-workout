@@ -4,6 +4,7 @@ A Python CLI tool to upload CSV training plans to Garmin Connect. This tool pars
 
 ## Features
 
+### Upload & Manage Training Plans
 - 📅 **CSV-based training plans** - Define workouts in an easy-to-read spreadsheet format
 - 🔐 **Secure authentication** - Token caching prevents rate limiting; supports MFA
 - 🏃 **Running workout support** - Full support for warmup, cooldown, intervals, repeats
@@ -14,6 +15,16 @@ A Python CLI tool to upload CSV training plans to Garmin Connect. This tool pars
 - 📋 **List workouts** - View scheduled workouts from your Garmin calendar
 - 🗑️ **Bulk delete** - Clear scheduled workouts from a date range before re-uploading
 - 📊 **Progress tracking** - Rich CLI with progress bars and colored output
+
+### Download & Export
+- 📥 **Download activities** - Export completed activities with JSON metadata, FIT files, and GPX tracks
+- 🏷️ **Activity filtering** - Filter downloads by activity type (running, cycling, etc.)
+- 📂 **Organized exports** - Activities saved to date-named folders with consistent naming
+
+### Template Management
+- 📚 **List templates** - View all workout templates in your Garmin library
+- 🧹 **Bulk cleanup** - Safely delete unused workout templates (protects scheduled ones)
+- 🔍 **Smart filtering** - Filter templates by name for targeted cleanup
 
 ## Installation
 
@@ -112,6 +123,55 @@ garmin-plan-uploader list 2026-03-01 2026-07-31 --by-week
 
 This is useful for reviewing your training plan without making any changes.
 
+### Download Activities
+
+Export completed activities with full metadata, original FIT files, and GPX tracks:
+
+```bash
+# Download all running activities from a date range
+garmin-plan-uploader download --start-date 2025-11-01 --end-date 2025-12-01 --activity-type running
+
+# Download all activity types
+garmin-plan-uploader download --start-date 2025-11-01 --end-date 2025-12-01
+
+# Also include scheduled (planned) workouts
+garmin-plan-uploader download --start-date 2025-11-01 --end-date 2025-12-01 --include-planned
+```
+
+Downloads are saved to `workouts/{start}_{end}/activities/` with files named:
+- `{date}_{name}.json` - Full activity metadata
+- `{date}_{name}.zip` - Original FIT file  
+- `{date}_{name}.gpx` - GPS track (if available)
+
+### Manage Workout Templates
+
+Over time, your Garmin workout library can accumulate hundreds of unused templates. These tools help you audit and clean them up:
+
+```bash
+# List all workout templates in your library
+garmin-plan-uploader list-templates
+
+# Filter templates by name
+garmin-plan-uploader list-templates --name-contains "10K"
+
+# Preview unused templates that would be deleted (safe - excludes scheduled ones)
+garmin-plan-uploader delete-templates --all --dry-run
+
+# Delete all unused templates (safe - won't affect your training plan)
+garmin-plan-uploader delete-templates --all --yes
+
+# Delete only templates containing specific text
+garmin-plan-uploader delete-templates --name-contains "Old Plan" --yes
+
+# DANGEROUS: Include templates scheduled for future workouts
+garmin-plan-uploader delete-templates --all --include-scheduled --yes
+```
+
+**Safety features:**
+- By default, only deletes templates with no future scheduled workouts
+- Always use `--dry-run` first to preview what would be deleted
+- Use `--include-scheduled` only if you want to also delete scheduled templates (orphans calendar entries)
+
 ## Common Workflows
 
 ### Update an Existing Training Plan
@@ -131,6 +191,35 @@ garmin-plan-uploader upload updated_plan.csv --start-date 2026-01-05
 ```bash
 # See what's scheduled for race week and taper
 garmin-plan-uploader list 2026-07-13 2026-07-25 --by-week
+```
+
+### Backup Your Training Data
+
+Download all your completed runs for analysis or backup:
+
+```bash
+# Download a full training block
+garmin-plan-uploader download \
+  --start-date 2025-01-01 \
+  --end-date 2025-06-30 \
+  --activity-type running
+```
+
+This creates a folder with JSON metadata (for analysis in Python/R), FIT files (for upload to other platforms), and GPX tracks (for mapping).
+
+### Clean Up Your Workout Library
+
+After uploading many training plans, you may have hundreds of unused workout templates:
+
+```bash
+# See how many templates you have
+garmin-plan-uploader list-templates
+
+# Preview what can be safely deleted
+garmin-plan-uploader delete-templates --all --dry-run
+
+# Clean up unused templates (safe - keeps scheduled ones)
+garmin-plan-uploader delete-templates --all --yes
 ```
 
 ### Add Individual Workouts
@@ -299,6 +388,17 @@ workouts = get_scheduled_workouts_in_range(
 )
 for w in workouts:
     print(f"{w['date']}: {w['title']}")
+
+# Download activities
+from garmin_plan_uploader.garmin_client import download_activities_to_folder
+
+download_activities_to_folder(
+    session,
+    date(2025, 11, 1),
+    date(2025, 12, 1),
+    "exports/november_runs",
+    activity_type="running"
+)
 
 # Create and upload a single workout
 workout_text = """running: Easy Recovery
