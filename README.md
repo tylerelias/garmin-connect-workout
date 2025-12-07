@@ -30,7 +30,12 @@ A Python tool to upload CSV training plans to Garmin Connect. This tool parses t
 
 ### Desktop GUI Application
 - 🖥️ **No terminal needed** - Full graphical interface for all features
-- 📅 **Visual calendar** - Month grid view with navigation to see scheduled workouts
+- �️ **Workout Builder** - Create workouts visually with drag-and-drop calendar planning
+- 📚 **Template Library** - Built-in workout templates (Easy Run, Intervals, Tempo, Long Run, etc.)
+- 🔄 **Progressive Generator** - Auto-create progressive workout series with increasing duration
+- 📅 **Visual Calendar** - Month grid view with workout details on click
+- 📊 **Training Dashboard** - Weekly volume charts, phase breakdown, and plan statistics
+- 📥 **iCal Export** - Export your training plan to any calendar app
 - 👀 **Preview uploads** - See parsed workouts before uploading
 - 🔄 **Progress indicators** - Visual progress bars for all operations
 
@@ -82,17 +87,71 @@ garmin-plan-gui
 The GUI provides:
 
 1. **Login Screen** - Enter your Garmin Connect credentials or use a saved session
-2. **Upload Tab** - Browse for CSV files, preview workouts, and upload to Garmin
-3. **Calendar Tab** - Visual month grid showing scheduled workouts with navigation
-4. **Download Tab** - Export activities (coming soon)
-5. **Templates Tab** - Manage workout library (coming soon)
+2. **Builder Tab** - Visual workout builder with templates, step editor, and calendar planning
+3. **Upload Tab** - Browse for CSV files, preview workouts, and upload to Garmin
+4. **Calendar Tab** - Visual month grid showing scheduled workouts with details and iCal export
+5. **Download Tab** - Export activities with date range selection and type filtering
+6. **Templates Tab** - Manage and clean up your Garmin workout library
+
+### GUI Features in Detail
+
+#### Workout Builder
+The Builder tab provides a complete workout creation environment:
+
+- **Template Library**: Start from built-in templates (Easy Run, Recovery, Intervals, Tempo, Long Run, Hill Repeats, VO2 Max, Fartlek, Strides) or create custom templates
+- **Step Editor**: Add warmup, run, recover, cooldown, rest, and repeat steps with:
+  - Duration (time or distance)
+  - Target (heart rate zones Z1-Z5 or pace ranges)
+  - Notes that appear in Garmin Connect
+- **Calendar Grid**: Plan multiple weeks at once with:
+  - Drag-and-drop workouts between days
+  - Copy/paste and duplicate functionality
+  - Week phase labels (Base, Build, Peak, Taper, Recovery, Race)
+  - Recovery week marking
+  - Week notes for planning context
+- **Progressive Generator**: Automatically create progressive workout series (e.g., long runs increasing 10 min each week)
+- **Quick Fill**: Bulk-fill specific days across all weeks (e.g., every Tuesday = Intervals)
+- **Training Dashboard**: Visual overview with weekly volume bar chart and phase breakdown
+- **Export Options**: Save as CSV for later editing or upload directly to Garmin
+
+#### Calendar View
+The Calendar tab shows your Garmin Connect training calendar:
+
+- **Month Navigation**: Browse through months with arrow buttons
+- **Workout Badges**: See workouts as colored indicators on each day
+- **Workout Details**: Click any workout to see full step-by-step breakdown
+- **Delete Range**: Remove scheduled workouts from a date range
+- **iCal Export**: Export workouts to .ics format for:
+  - This Month
+  - Next 3 Months  
+  - Next Year
+  - Includes full workout steps in calendar event descriptions
+
+#### Download Activities
+Export your completed activities:
+
+- **Date Range Selection**: Quick buttons for Last Week, Last Month, Last Year
+- **Activity Type Filter**: Running, Cycling, Swimming, Hiking, Walking, etc.
+- **Export Formats**: JSON metadata, FIT files (zipped), GPX tracks
+- **Include Planned**: Optionally download scheduled workout definitions
+
+#### Template Management
+Keep your Garmin workout library organized:
+
+- **View All Templates**: List every workout template in your library
+- **Filter by Name**: Search for specific workouts
+- **Identify Unused**: See which templates have no scheduled instances
+- **Bulk Cleanup**: Safely delete unused templates (protected mode won't delete scheduled ones)
 
 ### GUI Screenshots
 
 The application opens with a login screen. After authentication, you'll see tabs for different functions:
 
+- **Builder**: Create and plan workouts visually, then export or upload
 - **Upload Plan**: Drag & drop or browse for CSV files, select start date, preview the parsed workouts in a table, then upload with a single click
-- **Calendar**: Navigate months with arrow buttons, see workouts as colored badges on each day, click a day to see workout details
+- **Calendar**: Navigate months with arrow buttons, see workouts as colored badges on each day, click a day to see workout details, export to iCal
+- **Download**: Select date ranges and activity types, download to organized folders
+- **Templates**: View your workout library, filter and clean up unused templates
 
 ## CLI Usage
 
@@ -477,12 +536,27 @@ ruff check src/
 
 ```
 src/garmin_plan_uploader/
-├── __init__.py          # Package metadata
-├── main.py              # CLI entry point (typer)
-├── auth_manager.py      # Garmin authentication with token caching
-├── csv_parser.py        # CSV and workout text parsing
-├── garmin_client.py     # Garmin API operations
-└── domain_models.py     # Pydantic models for workouts
+├── __init__.py              # Package metadata
+├── main.py                  # CLI entry point (typer)
+├── auth_manager.py          # Garmin authentication with token caching
+├── csv_parser.py            # CSV and workout text parsing
+├── garmin_client.py         # Garmin API operations
+├── domain_models.py         # Pydantic models for workouts
+├── workout_service.py       # High-level workout operations
+└── gui/                     # Desktop GUI application
+    ├── app.py               # Main window and application entry
+    ├── login_widget.py      # Authentication screen
+    ├── upload_widget.py     # CSV upload interface
+    ├── calendar_widget.py   # Calendar view with iCal export
+    ├── download_widget.py   # Activity download interface
+    ├── templates_widget.py  # Template management
+    └── builder/             # Workout Builder module
+        ├── builder_widget.py    # Main builder interface
+        ├── models.py            # Builder data models
+        ├── step_editor.py       # Workout step editing
+        ├── template_library.py  # Built-in templates
+        ├── calendar_grid.py     # Weekly planning grid
+        └── dashboard.py         # Training statistics
 ```
 
 ## Credits
