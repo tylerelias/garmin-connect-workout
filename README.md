@@ -1,6 +1,8 @@
 # Garmin Plan Uploader
 
-A Python CLI tool to upload CSV training plans to Garmin Connect. This tool parses training plans in a human-readable CSV format and uploads them as structured workouts to your Garmin Connect calendar.
+A Python tool to upload CSV training plans to Garmin Connect. This tool parses training plans in a human-readable CSV format and uploads them as structured workouts to your Garmin Connect calendar.
+
+**Available as both a command-line (CLI) tool and a desktop GUI application.**
 
 ## Features
 
@@ -26,9 +28,15 @@ A Python CLI tool to upload CSV training plans to Garmin Connect. This tool pars
 - 🧹 **Bulk cleanup** - Safely delete unused workout templates (protects scheduled ones)
 - 🔍 **Smart filtering** - Filter templates by name for targeted cleanup
 
+### Desktop GUI Application
+- 🖥️ **No terminal needed** - Full graphical interface for all features
+- 📅 **Visual calendar** - Month grid view with navigation to see scheduled workouts
+- 👀 **Preview uploads** - See parsed workouts before uploading
+- 🔄 **Progress indicators** - Visual progress bars for all operations
+
 ## Installation
 
-### From Source
+### From Source (CLI only)
 
 ```bash
 # Clone the repository
@@ -39,12 +47,20 @@ cd garmin-connect-workout
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install in editable mode
+# Install CLI only
 pip install -e .
+```
+
+### With GUI Support
+
+```bash
+# Install with GUI dependencies
+pip install -e ".[gui]"
 ```
 
 ### Dependencies
 
+**CLI:**
 - Python 3.11+
 - garminconnect (Garmin Connect API client)
 - pydantic (Data validation)
@@ -52,7 +68,33 @@ pip install -e .
 - typer (CLI framework)
 - rich (Terminal formatting)
 
-## Usage
+**GUI (optional):**
+- PySide6 (Qt6 for Python)
+
+## GUI Usage
+
+Launch the desktop application:
+
+```bash
+garmin-plan-gui
+```
+
+The GUI provides:
+
+1. **Login Screen** - Enter your Garmin Connect credentials or use a saved session
+2. **Upload Tab** - Browse for CSV files, preview workouts, and upload to Garmin
+3. **Calendar Tab** - Visual month grid showing scheduled workouts with navigation
+4. **Download Tab** - Export activities (coming soon)
+5. **Templates Tab** - Manage workout library (coming soon)
+
+### GUI Screenshots
+
+The application opens with a login screen. After authentication, you'll see tabs for different functions:
+
+- **Upload Plan**: Drag & drop or browse for CSV files, select start date, preview the parsed workouts in a table, then upload with a single click
+- **Calendar**: Navigate months with arrow buttons, see workouts as colored badges on each day, click a day to see workout details
+
+## CLI Usage
 
 ### Basic Upload
 
