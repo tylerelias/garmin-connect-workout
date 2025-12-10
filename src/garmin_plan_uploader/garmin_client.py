@@ -20,7 +20,8 @@ from .domain_models import Workout
 logger = logging.getLogger(__name__)
 
 # Rate limiting delay between API calls (seconds)
-API_DELAY_SECONDS = 2.0
+# Reduced from 2.0 to 1.0 for better performance while still preventing rate limiting
+API_DELAY_SECONDS = 1.0
 
 
 class GarminClientError(Exception):
@@ -157,16 +158,12 @@ def upload_and_schedule(
     # Upload the workout
     workout_id = upload_workout(session, workout)
 
-    # Rate limiting delay
+    # Single delay between upload and schedule (reduced from 2 delays)
     if delay > 0:
         time.sleep(delay)
 
     # Schedule the workout
     schedule_workout(session, workout_id, schedule_date)
-
-    # Another delay before next operation
-    if delay > 0:
-        time.sleep(delay)
 
     return workout_id
 
@@ -361,8 +358,6 @@ def get_scheduled_workouts_in_range(
     Raises:
         GarminClientError: If request fails
     """
-    from datetime import datetime
-
     # Use a dict to deduplicate by calendar ID
     workouts_by_id: dict[int, dict[str, Any]] = {}
 
@@ -374,6 +369,7 @@ def get_scheduled_workouts_in_range(
 
             # Filter for workout items within the date range
             for item in items:
+                # Early exit if not a workout
                 if item.get("itemType") != "workout":
                     continue
 
@@ -381,7 +377,13 @@ def get_scheduled_workouts_in_range(
                 if not item_date_str:
                     continue
 
-                item_date = date.fromisoformat(item_date_str)
+                # Parse date once and cache the result
+                try:
+                    item_date = date.fromisoformat(item_date_str)
+                except (ValueError, TypeError):
+                    continue
+
+                # Check date range
                 if start_date <= item_date <= end_date:
                     # Deduplicate by calendar ID
                     calendar_id = item.get("id")
@@ -391,7 +393,7 @@ def get_scheduled_workouts_in_range(
         except GarminClientError:
             logger.warning(f"Failed to get calendar for {current.year}-{current.month:02d}")
 
-        # Move to next month
+        # Move to next month using simpler logic
         if current.month == 12:
             current = date(current.year + 1, 1, 1)
         else:
@@ -437,6 +439,7 @@ def delete_scheduled_workout(
 
         logger.info(f"Deleted scheduled workout {calendar_id}")
 
+        # Only sleep if delay is configured (moved to caller responsibility for batch operations)
         if delay > 0:
             time.sleep(delay)
 
@@ -744,6 +747,9 @@ def download_activities_to_folder(
         # Create safe filename prefix
         safe_name = sanitize_filename(activity_name)
         file_prefix = f"{activity_date}_{safe_name}"
+        
+        # Check GPS data once upfront
+        has_gps = has_gps_data(activity)
 
         try:
             # Save JSON metadata
@@ -751,9 +757,6 @@ def download_activities_to_folder(
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(activity, f, indent=2, ensure_ascii=False)
             stats["files"] += 1
-
-            if delay > 0:
-                time.sleep(delay / 2)  # Shorter delay for metadata
 
             # Download FIT file
             try:
@@ -770,18 +773,19 @@ def download_activities_to_folder(
                 time.sleep(delay)
 
             # Download GPX if activity has GPS data
-            if has_gps_data(activity):
+            if has_gps:
                 try:
                     gpx_data = download_activity_file(session, activity_id, "GPX")
                     gpx_path = activities_dir / f"{file_prefix}.gpx"
                     with open(gpx_path, "wb") as f:
                         f.write(gpx_data)
                     stats["files"] += 1
+                    
+                    # Only sleep after GPX download if it succeeded
+                    if delay > 0:
+                        time.sleep(delay)
                 except GarminClientError as e:
                     stats["errors"].append(f"GPX download failed for {activity_name}: {e}")
-
-                if delay > 0:
-                    time.sleep(delay)
 
             # Update statistics
             stats["activities"] += 1

@@ -472,6 +472,9 @@ def parse_training_plan(
 
     # Parse workouts
     result: list[tuple[date, Workout]] = []
+    
+    # Pre-compile day column map to avoid repeated lookups
+    day_indices = {day_name: day_idx for day_idx, day_name in enumerate(DAY_COLUMNS) if day_name in day_col_map}
 
     for row_idx, row in df.iterrows():
         # Determine week number
@@ -490,10 +493,7 @@ def parse_training_plan(
         week_start = start_date + timedelta(weeks=week_offset)
 
         # Process each day column
-        for day_idx, day_name in enumerate(DAY_COLUMNS):
-            if day_name not in day_col_map:
-                continue
-
+        for day_name, day_idx in day_indices.items():
             col_name = day_col_map[day_name]
             cell_content = str(row.get(col_name, "")).strip()
 
