@@ -358,7 +358,9 @@ def _build_steps_recursive(
                 last_step = steps[-1]
                 note_text = line.value.strip()
                 # Remove surrounding quotes if present
-                if note_text.startswith('"') and note_text.endswith('"') or note_text.startswith("'") and note_text.endswith("'"):
+                if (note_text.startswith('"') and note_text.endswith('"')) or (
+                    note_text.startswith("'") and note_text.endswith("'")
+                ):
                     note_text = note_text[1:-1]
 
                 if isinstance(last_step, ExecutableStep):

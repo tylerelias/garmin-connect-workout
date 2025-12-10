@@ -115,7 +115,8 @@ def schedule_workout(session: GarminSession, workout_id: str, schedule_date: dat
         url = f"/workout-service/schedule/{workout_id}"
         payload = {"date": date_str}
 
-        session.garth.post(
+        # Intentionally discard response - API returns 200 with no meaningful data
+        _ = session.garth.post(
             "connectapi",
             url,
             json=payload,
