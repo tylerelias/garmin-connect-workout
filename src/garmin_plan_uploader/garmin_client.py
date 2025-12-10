@@ -115,7 +115,7 @@ def schedule_workout(session: GarminSession, workout_id: str, schedule_date: dat
         url = f"/workout-service/schedule/{workout_id}"
         payload = {"date": date_str}
 
-        response = session.garth.post(
+        session.garth.post(
             "connectapi",
             url,
             json=payload,
@@ -747,7 +747,7 @@ def download_activities_to_folder(
         # Create safe filename prefix
         safe_name = sanitize_filename(activity_name)
         file_prefix = f"{activity_date}_{safe_name}"
-        
+
         # Check GPS data once upfront
         has_gps = has_gps_data(activity)
 
@@ -780,7 +780,7 @@ def download_activities_to_folder(
                     with open(gpx_path, "wb") as f:
                         f.write(gpx_data)
                     stats["files"] += 1
-                    
+
                     # Only sleep after GPX download if it succeeded
                     if delay > 0:
                         time.sleep(delay)
@@ -864,9 +864,6 @@ def download_planned_workouts_to_folder(
             # Get full workout details
             workout_details = get_workout_details(session, workout_id)
 
-            if delay > 0:
-                time.sleep(delay)
-
             # Save JSON metadata
             json_path = planned_dir / f"{file_prefix}.json"
             with open(json_path, "w", encoding="utf-8") as f:
@@ -883,6 +880,7 @@ def download_planned_workouts_to_folder(
             except GarminClientError as e:
                 stats["errors"].append(f"FIT download failed for {workout_name}: {e}")
 
+            # Single delay after both files are processed
             if delay > 0:
                 time.sleep(delay)
 
