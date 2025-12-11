@@ -358,9 +358,9 @@ def _build_steps_recursive(
                 last_step = steps[-1]
                 note_text = line.value.strip()
                 # Remove surrounding quotes if present
-                if note_text.startswith('"') and note_text.endswith('"'):
-                    note_text = note_text[1:-1]
-                elif note_text.startswith("'") and note_text.endswith("'"):
+                if (note_text.startswith('"') and note_text.endswith('"')) or (
+                    note_text.startswith("'") and note_text.endswith("'")
+                ):
                     note_text = note_text[1:-1]
 
                 if isinstance(last_step, ExecutableStep):
@@ -473,6 +473,9 @@ def parse_training_plan(
     # Parse workouts
     result: list[tuple[date, Workout]] = []
 
+    # Pre-compile day column map to avoid repeated lookups
+    day_indices = {day_name: day_idx for day_idx, day_name in enumerate(DAY_COLUMNS) if day_name in day_col_map}
+
     for row_idx, row in df.iterrows():
         # Determine week number
         if has_week_col:
@@ -490,10 +493,7 @@ def parse_training_plan(
         week_start = start_date + timedelta(weeks=week_offset)
 
         # Process each day column
-        for day_idx, day_name in enumerate(DAY_COLUMNS):
-            if day_name not in day_col_map:
-                continue
-
+        for day_name, day_idx in day_indices.items():
             col_name = day_col_map[day_name]
             cell_content = str(row.get(col_name, "")).strip()
 

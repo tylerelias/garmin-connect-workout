@@ -7,18 +7,18 @@ with support for progress callbacks, cancellation, and structured results.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 from threading import Event
-from typing import Any, Callable
+from typing import Any
 
 from .auth_manager import GarminSession
 from .csv_parser import parse_training_plan
 from .domain_models import Workout
 from .garmin_client import (
     API_DELAY_SECONDS,
-    GarminClientError,
     delete_scheduled_workout,
     delete_workout,
     download_activities_to_folder,
@@ -307,11 +307,15 @@ class WorkoutService:
             if name_contains and name_contains.lower() not in name.lower():
                 continue
 
+            # Extract sport type safely with single dict access
+            sport_type_obj = item.get("sportType")
+            sport_type = sport_type_obj.get("sportTypeKey", "unknown") if sport_type_obj else "unknown"
+
             templates.append(
                 WorkoutTemplate(
                     workout_id=item.get("workoutId", 0),
                     name=name,
-                    sport_type=item.get("sportType", {}).get("sportTypeKey", "unknown"),
+                    sport_type=sport_type,
                     raw_data=item,
                 )
             )
